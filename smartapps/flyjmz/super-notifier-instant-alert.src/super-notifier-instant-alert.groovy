@@ -15,9 +15,9 @@ Forum: https://community.smartthings.com/t/release-super-notifier-all-your-alert
    for the specific language governing permissions and limitations under the License.
 
 Version History:
-	1.0 - 5Sep2016, Initial Commit
+    1.0 - 5Sep2016, Initial Commit
     1.1 - 10Oct2016, all tweaks rolled into public release
- 	1.2 - 5Oct2017, added temperature sensor alert capability
+    1.2 - 5Oct2017, added temperature sensor alert capability
     1.3 - 10Oct2017, added lock locked/unlocked capability
     1.4 - 1Feb2018, added timestamp to messages and debug logging option
     1.5 - 21Feb2018, fixed timestamp so hours are in 24-hour time since there isn't an AM/PM
@@ -25,21 +25,30 @@ Version History:
     1.6.1 - 20Apr2018, fixed power metering.
     1.6.2 - 24Jul2018, added contact book like feature to ease SmartThings' depricating the real contact book
     1.6.3 - 6Aug2018, fixed bug that forced you to enter a SMS phone number in the parent app no matter what
+    1.6.4 - 13Oct2018, added audio notifications for speech synthesis devices, added "only when switch on/off" to More Options settings,
+    1.6.5 - 14Mar2019, deleted 'is' from notification message, added switch and alarm control, added ability to notify on alarm activation, added v1 of TTS device support- needs to be confirmed, added v1 of Pushover support- needs testing
+    1.6.6 - 10Jun2019, updated UI so sections with user-picked options are not hidden by default, v2 of TTS support
+    1.6.7 - 4Aug2019, added chime notifications, updated alarm and switch notification execution code (added each, it)
+    1.6.8 - 15Sep19, fixed TTS with @xraive's help
+    1.6.9 - 1Jul20, added Lock Jammed from @disforw
 
 To Do:
+-Make notifications for for new app? - should be done
+-Does TTS work? - should be done
+-Does Pushover work?  Looks like priority will always be normal based on the DTH...
 */
 
-def appVersion() {"1.6.3"}
+def appVersion() {"1.6.9"}
  
 definition(
-	name: "Super Notifier - Instant Alert",
-	namespace: "flyjmz",
-	author: "flyjmz230@gmail.com",
+    name: "Super Notifier - Instant Alert",
+    namespace: "flyjmz",
+    author: "flyjmz230@gmail.com",
     parent: "flyjmz:Super Notifier",
-	description: "Child app for Super Notifier that provides an instant alert whenever something happens",
-	category: "My Apps",
-	iconUrl: "https://github.com/flyjmz/jmzSmartThings/raw/master/resources/phone2x.png",
-	iconX2Url: "https://github.com/flyjmz/jmzSmartThings/raw/master/resources/phone2x.png"
+    description: "Child app for Super Notifier that provides an instant alert whenever something happens",
+    category: "My Apps",
+    iconUrl: "https://github.com/flyjmz/jmzSmartThings/raw/master/resources/phone2x.png",
+    iconX2Url: "https://github.com/flyjmz/jmzSmartThings/raw/master/resources/phone2x.png"
 )
 
 preferences {
@@ -50,6 +59,7 @@ preferences {
 def settings() {
     dynamicPage(name: "settings", title: "", install: true, uninstall: true) {
         section("Choose one or more, notify when..."){
+            input "myAlarm", "capability.alarm", title: "Alarm Activated", required: false, multiple: true
             input "button", "capability.button", title: "Button Pushed", required: false, multiple: true
             input "motion", "capability.motionSensor", title: "Motion Here", required: false, multiple: true
             input "contact", "capability.contactSensor", title: "Contact Opens", required: false, multiple: true
@@ -63,6 +73,7 @@ def settings() {
             input "water", "capability.waterSensor", title: "Water Sensor Wet", required: false, multiple: true
             input "lockLocked", "capability.lock", title: "Lock Locked", required: false, multiple: true
             input "lockUnlocked", "capability.lock", title: "Lock Unlocked", required: false, multiple: true
+            input "lockJammed", "capability.lock", title: "Lock Jammed", required: false, multiple: true
             input "temp", "capability.temperatureMeasurement", title: "Temp Too Hot or Cold", required: false, multiple: false, submitOnChange: true
             if (temp != null) {
                 input "tempTooHot", "number", title: "Too Hot When Temp is Above:", range: "*..*", required: false
@@ -84,8 +95,14 @@ def settings() {
         section("Send this custom message (optional, sends standard status message if not specified)") {
             input "messageText", "text", title: "Message Text", required: false
         }
+        
+        section("Message Details") {
+            paragraph "Minimum time between messages (optional, defaults to every message)"
+            input "frequency", "decimal", title: "Minutes", required: false
+            input "useTimeStamp", "bool", title: "Add timestamp to messages?", required: false
+        }
 
-        section("Notifications", hidden: false, hideable: true) {
+        section("Text/Push Notifications", hidden: hideTextPushNotificationsSection(), hideable: true) {
             def SMSContactsSendSMS = []
 
             if (location.contactBookEnabled ==  true) {
@@ -108,75 +125,100 @@ def settings() {
                 }
             }
         }
-
-
-        section("Message Details") {
-            paragraph "Minimum time between messages (optional, defaults to every message)"
-            input "frequency", "decimal", title: "Minutes", required: false
-            input "useTimeStamp", "bool", title: "Add timestamp to messages?", required: false
+ 
+        section("Speech Notifications", hidden: hideSpeechNotificationsSection(), hideable: true) {
+            paragraph "Optionally have the message spoken using a speech synthesis or text-to-speed device (e.g. LANnouncer or Sonos)"
+            input name: "speechDevices", type: "capability.speechSynthesis", title: "Which Speakers (e.g., LANnouncer)?", required: false, multiple: true
+            input name: "ttsDevices", type: "capability.musicPlayer", title: "Which Text-To-Speech Speakers (e.g., Sonos)?", required: false, multiple: true
+        }
+        
+        section("Notify via Switch/Alarm/Chime", hidden: hideSwitchAlarmSection(), hideable: true) {
+            input "controlledSwitch", "capability.switch", title: "Which Switches?", required: false, multiple: true, submitOnChange: true
+            if (controlledSwitch) {
+                input "controlledSwitchOn", "bool", title: "Turn switch on or off?", required: false
+            }
+            input name: "controlledAlarm", type: "capability.alarm", title: "Which Alarms?", required: false, multiple: true
+            input name: "chimeDevices", type: "capability.tone", title: "Which Chimes?", required: false, multiple: true
+            paragraph "Optionally set a delay time to revert switches, or turn off the alarm or chimes. If left blank, you'll have to revert them manually."
+            input name: "revertDelay", type: "number", title: "Delay Time (seconds)", required: false
+        }
+        
+        section("Pushover Notifications", hidden: hidePushoverNotificationsSection(), hideable: true) {
+            paragraph "Optionally send messages via Pushover." 
+            input name: "pushoverDevice", type: "capability.notification", title: "Which Pushover Devices?", required: false, multiple: true, submitOnChange: true
+            if (pushoverDevice) input name: "messagePriority", type: "enum", title: "Message Priority", options: ["Low", "Normal", "High", "Emergency"], required: true
+            paragraph "Pushover Device Type Handler must be installed in your SmartThings IDE & the device setup first:"
+            href url: "https://github.com/flyjmz/jmzSmartThings/blob/master/devicetypes/flyjmz/ZP_Pushover_device.groovy", style:"embedded", title: "Link to Pushover DTH code"
+            href url: "https://community.smartthings.com/t/pushover-notifications-device-type/34562", style:"embedded", title: "Link to Pushover DTH Community Forums"
         }
 
+        section(title: "Execution Restrictions", hidden: hideExecutionRestrictionsSection(), hideable: true) {
+            def timeLabel = timeIntervalLabel()
+            href "certainTime", title: "Only during a certain time", description: timeLabel ?: "Tap to set", state: timeLabel ? "complete" : null
+            input "days", "enum", title: "Only on certain days of the week", multiple: true, required: false, options: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+            input "controlSwitch", "capability.switch", title: "Only when this switch is...?", required: false, submitOnChange: true
+            if (controlSwitch) input "controlSwitchOnOrOff","enum", title: "...On or Off?", multiple: false, required: true, options: ["On", "Off"]
+            mode(title: "Only during specific mode(s)")
+        }
+        
         section() {
                 label title: "Assign a name", required: true
-        }
-
-        section(title: "More options", hidden: hideOptionsSection(), hideable: true) {
-                def timeLabel = timeIntervalLabel()
-                href "certainTime", title: "Only during a certain time", description: timeLabel ?: "Tap to set", state: timeLabel ? "complete" : null
-                input "days", "enum", title: "Only on certain days of the week", multiple: true, required: false, options: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-                mode(title: "Only during specific mode(s)")
         }
      }
  }
  
 def certainTime() {
-	dynamicPage(name:"certainTime",title: "Only during a certain time", uninstall: false) {
-		section() {
-			input "startingX", "enum", title: "Starting at", options: ["A specific time", "Sunrise", "Sunset"], defaultValue: "A specific time", submitOnChange: true
-			if(startingX in [null, "A specific time"]) input "starting", "time", title: "Start time", required: false
-			else {
-				if(startingX == "Sunrise") input "startSunriseOffset", "number", range: "*..*", title: "Offset in minutes (+/-)", required: false
-				else if(startingX == "Sunset") input "startSunsetOffset", "number", range: "*..*", title: "Offset in minutes (+/-)", required: false
-			}
-		}
-		
-		section() {
-			input "endingX", "enum", title: "Ending at", options: ["A specific time", "Sunrise", "Sunset"], defaultValue: "A specific time", submitOnChange: true
-			if(endingX in [null, "A specific time"]) input "ending", "time", title: "End time", required: false
-			else {
-				if(endingX == "Sunrise") input "endSunriseOffset", "number", range: "*..*", title: "Offset in minutes (+/-)", required: false
-				else if(endingX == "Sunset") input "endSunsetOffset", "number", range: "*..*", title: "Offset in minutes (+/-)", required: false
-			}
-		}
-	}
+    dynamicPage(name:"certainTime",title: "Only during a certain time", uninstall: false) {
+        section() {
+            input "startingX", "enum", title: "Starting at", options: ["A specific time", "Sunrise", "Sunset"], defaultValue: "A specific time", submitOnChange: true
+            if(startingX in [null, "A specific time"]) input "starting", "time", title: "Start time", required: false
+            else {
+                if(startingX == "Sunrise") input "startSunriseOffset", "number", range: "*..*", title: "Offset in minutes (+/-)", required: false
+                else if(startingX == "Sunset") input "startSunsetOffset", "number", range: "*..*", title: "Offset in minutes (+/-)", required: false
+            }
+        }
+        
+        section() {
+            input "endingX", "enum", title: "Ending at", options: ["A specific time", "Sunrise", "Sunset"], defaultValue: "A specific time", submitOnChange: true
+            if(endingX in [null, "A specific time"]) input "ending", "time", title: "End time", required: false
+            else {
+                if(endingX == "Sunrise") input "endSunriseOffset", "number", range: "*..*", title: "Offset in minutes (+/-)", required: false
+                else if(endingX == "Sunset") input "endSunsetOffset", "number", range: "*..*", title: "Offset in minutes (+/-)", required: false
+            }
+        }
+    }
 }
 
 def installed() {
-	log.info "Installed with settings: ${settings}"
-	initialize()
+    log.info "Installed with settings: ${settings}"
+    initialize()
 }
 
 def updated() {
-	log.info "Updated with settings: ${settings}"
-	unsubscribe()
-	initialize()
+    log.info "Updated with settings: ${settings}"
+    unsubscribe()
+    initialize()
 }
 
 def initialize() {
-	subscribe(button, "button.pushed", eventHandler)
-	subscribe(contact, "contact.open", eventHandler)
-   	subscribe(contactClosed, "contact.closed", eventHandler)
-	subscribe(acceleration, "acceleration.active", eventHandler)
-	subscribe(motion, "motion.active", eventHandler)
-	subscribe(mySwitch, "switch.on", eventHandler)
+    subscribe(myAlarm, "alarm.strobe", eventHandler)
+    subscribe(myAlarm, "alarm.siren", eventHandler)
+    subscribe(myAlarm, "alarm.both", eventHandler)
+    subscribe(button, "button.pushed", eventHandler)
+    subscribe(contact, "contact.open", eventHandler)
+    subscribe(contactClosed, "contact.closed", eventHandler)
+    subscribe(acceleration, "acceleration.active", eventHandler)
+    subscribe(motion, "motion.active", eventHandler)
+    subscribe(mySwitch, "switch.on", eventHandler)
     subscribe(mySwitchOff, "switch.off", eventHandler)
-	subscribe(arrivalPresence, "presence.present", eventHandler)
-	subscribe(departurePresence, "presence.not present", eventHandler)
-	subscribe(smoke, "smoke.detected", eventHandler)
-	subscribe(smoke, "smoke.tested", eventHandler)
-	subscribe(smoke, "carbonMonoxide.detected", eventHandler)
-	subscribe(water, "water.wet", eventHandler)
+    subscribe(arrivalPresence, "presence.present", eventHandler)
+    subscribe(departurePresence, "presence.not present", eventHandler)
+    subscribe(smoke, "smoke.detected", eventHandler)
+    subscribe(smoke, "smoke.tested", eventHandler)
+    subscribe(smoke, "carbonMonoxide.detected", eventHandler)
+    subscribe(water, "water.wet", eventHandler)
     subscribe(temp, "temperature", tempHandler)
+    subscribe(lockJammed,"lock.unknown", eventHandler)
     subscribe(lockLocked,"lock.locked", eventHandler)
     subscribe(lockUnlocked,"lock.unlocked", eventHandler)
     subscribe(knockSensor, "acceleration.active", knockAcceleration)
@@ -186,13 +228,13 @@ def initialize() {
 }
 
 def gettooCold() {
-	def temp1 = tempTooCold
+    def temp1 = tempTooCold
     if (temp1 == null) temp1 = -460.0
     return temp1
 }
 
 def gettooHot() {
-	def temp2 = tempTooHot 
+    def temp2 = tempTooHot 
     if (temp2 == null) temp2 = 3000.0
     return temp2
 }
@@ -200,27 +242,27 @@ def gettooHot() {
 def tempHandler(evt) {
     def tempState = temp.currentState("temperature")  //trigger is based on the event subcription, but the temp value for notifications is a direct state pull
     if (tempState.doubleValue > tooHot || tempState.doubleValue < tooCold) {
-    	eventHandler(evt)
+        eventHandler(evt)
     } else {if (parent.loggingOn) log.debug "Temp within limits, no action taken."}
 }
 
 def gettooHigh() {
-	def power1 = powerTooHigh
+    def power1 = powerTooHigh
     if (power1 == null) power1 = 2000.0
     return power1
 }
 
 def gettooLow() {
-	def power2 = powerTooLow 
+    def power2 = powerTooLow 
     if (power2 == null) power2 = -2000.0
     return power2
 }
 
 def powerHandler(evt) {
-	if (parent.loggingOn) log.debug "Notify got event ${evt} from ${evt.displayName}"
+    if (parent.loggingOn) log.debug "Notify got event ${evt} from ${evt.displayName}"
     def powerValue = evt.value.toDouble()
     if (powerValue > tooHigh || powerValue < tooLow) {
-    	eventHandler(evt)
+        eventHandler(evt)
     } else {if (parent.loggingOn) log.debug "Power within limits, no action taken."}
 }
 
@@ -244,143 +286,276 @@ def doorKnock() {
 }
 
 def eventHandler(evt) {
-	if (parent.loggingOn) log.debug "Notify got event ${evt} from ${evt.displayName}"
-	if (frequency) {
-		def lastTime = state[evt.deviceId]
-		if (lastTime == null || now() - lastTime >= frequency * 60000) {
-        	if (parent.loggingOn) log.debug "frequency used and it is time for new message, checking if within time & date period"
+    if (parent.loggingOn) log.debug "Notify got event ${evt} from ${evt.displayName}"
+    if (frequency) {
+        def lastTime = state[evt.deviceId]
+        if (lastTime == null || now() - lastTime >= frequency * 60000) {
+            if (parent.loggingOn) log.debug "frequency used and it is time for new message, checking if within time/day/mode/switch parameters"
             if (allOk) createInstantMessage(evt.name,evt.value,evt.device)
             state[evt.deviceId] = now()
-		}
-        else {
-        	if (parent.loggingOn) log.debug "frequency used but it is too early to send a new message"
         }
-	}
-	else {
-    	if (parent.loggingOn) log.debug "frequency not used, checking if within time & date period"
-		if (allOk) createInstantMessage(evt.name,evt.value,evt.device)
-	}
+        else {
+            if (parent.loggingOn) log.debug "frequency used but it is too early to send a new message"
+        }
+    }
+    else {
+        if (parent.loggingOn) log.debug "frequency not used, checking if within time/day/mode/switch parameters"
+        if (allOk) createInstantMessage(evt.name,evt.value,evt.device)
+    }
 }
 
 def createInstantMessage(name,value,device) {
-	String msg = messageText
+    String msg = messageText
     def messageDefault = ""
     if (!messageText) {
-		if (name == 'presence') {
-			if (value == 'present') {
-				messageDefault = "${device} has arrived"
-			} else {
-				messageDefault = "${device} has left"
-			}
-		} else {
-			messageDefault = "${device} is ${value}"
-		}
+        if (name == 'presence') {
+            if (value == 'present') {
+                messageDefault = "${device} has arrived"
+            } else {
+                messageDefault = "${device} has left"
+            }
+        } else {
+            messageDefault = "${device} ${value}"  //removed 'is' in v1.6.5.  Was "${device} is ${value}" 
+        }
         msg = messageDefault
-	}
-    if (useTimeStamp) {
-    	def stamp = new Date().format('yyyy-M-d HH:mm:ss',location.timeZone)
-        msg = msg + " (" + stamp + ")"
     }
-	log.info "msg sent: ${msg}"
     sendMessage(msg)
 }
 
 private getAllOk() {
-	daysOk && timeOk
+    daysOk && timeOk && switchOk
+}
+
+private getSwitchOk() {
+    def result = true
+    if (controlSwitch) {
+        if (controlSwitchOnOrOff == "On" && controlSwitch.currentState("switch")?.value != "on") {
+        result = false
+        } else if (controlSwitchOnOrOff == "Off" && controlSwitch.currentState("switch")?.value != "off") {
+        result = false
+        } else log.error "You're using a switch to control when this app will run, except the setting for when that switch is 'On' or 'Off' isn't set. Ignoring and allowing app to run regardless. Check your settings."
+    }
+    if (parent.loggingOn) log.debug "switchOk = $result"
+    return result
 }
 
 private getDaysOk() {
-	def result = true
-	if (days) {
-		def df = new java.text.SimpleDateFormat("EEEE")
-		if (location.timeZone) {
-			df.setTimeZone(location.timeZone)
-		}
-		else {
-			df.setTimeZone(TimeZone.getTimeZone("America/New_York"))
-		}
-		def day = df.format(new Date())
-		result = days.contains(day)
-	}
-	if (parent.loggingOn) log.debug "daysOk = $result"
-	return result
+    def result = true
+    if (days) {
+        def df = new java.text.SimpleDateFormat("EEEE")
+        if (location.timeZone) {
+            df.setTimeZone(location.timeZone)
+        }
+        else {
+            df.setTimeZone(TimeZone.getTimeZone("America/New_York"))
+        }
+        def day = df.format(new Date())
+        result = days.contains(day)
+    }
+    if (parent.loggingOn) log.debug "daysOk = $result"
+    return result
 }
 
 private getTimeOk() {
-	def result = true
-	if ((starting && ending) ||
-	(starting && endingX in ["Sunrise", "Sunset"]) ||
-	(startingX in ["Sunrise", "Sunset"] && ending) ||
-	(startingX in ["Sunrise", "Sunset"] && endingX in ["Sunrise", "Sunset"])) {
-		def currTime = now()
-		def start = null
-		def stop = null
-		def s = getSunriseAndSunset(zipCode: zipCode, sunriseOffset: startSunriseOffset, sunsetOffset: startSunsetOffset)
-		if(startingX == "Sunrise") start = s.sunrise.time
-		else if(startingX == "Sunset") start = s.sunset.time
-		else if(starting) start = timeToday(starting,location.timeZone).time
-		s = getSunriseAndSunset(zipCode: zipCode, sunriseOffset: endSunriseOffset, sunsetOffset: endSunsetOffset)
-		if(endingX == "Sunrise") stop = s.sunrise.time
-		else if(endingX == "Sunset") stop = s.sunset.time
-		else if(ending) stop = timeToday(ending,location.timeZone).time
-		result = start < stop ? currTime >= start && currTime <= stop : currTime <= stop || currTime >= start
-	}
-	if (parent.loggingOn) log.debug "TimeOk = $result"
-	return result
+    def result = true
+    if ((starting && ending) ||
+    (starting && endingX in ["Sunrise", "Sunset"]) ||
+    (startingX in ["Sunrise", "Sunset"] && ending) ||
+    (startingX in ["Sunrise", "Sunset"] && endingX in ["Sunrise", "Sunset"])) {
+        def currTime = now()
+        def start = null
+        def stop = null
+        def s = getSunriseAndSunset(zipCode: zipCode, sunriseOffset: startSunriseOffset, sunsetOffset: startSunsetOffset)
+        if(startingX == "Sunrise") start = s.sunrise.time
+        else if(startingX == "Sunset") start = s.sunset.time
+        else if(starting) start = timeToday(starting,location.timeZone).time
+        s = getSunriseAndSunset(zipCode: zipCode, sunriseOffset: endSunriseOffset, sunsetOffset: endSunsetOffset)
+        if(endingX == "Sunrise") stop = s.sunrise.time
+        else if(endingX == "Sunset") stop = s.sunset.time
+        else if(ending) stop = timeToday(ending,location.timeZone).time
+        result = start < stop ? currTime >= start && currTime <= stop : currTime <= stop || currTime >= start
+    }
+    if (parent.loggingOn) log.debug "TimeOk = $result"
+    return result
 }
 
 private hhmm(time, fmt = "h:mm a") {
-	def t = timeToday(time, location.timeZone)
-	def f = new java.text.SimpleDateFormat(fmt)
-	f.setTimeZone(location.timeZone ?: timeZone(time))
-	f.format(t)
+    def t = timeToday(time, location.timeZone)
+    def f = new java.text.SimpleDateFormat(fmt)
+    f.setTimeZone(location.timeZone ?: timeZone(time))
+    f.format(t)
 }
 
-private hideOptionsSection() {
-	(starting || ending || days || modes || startingX || endingX) ? false : true
+private hideExecutionRestrictionsSection() {
+    (starting || ending || days || modes || startingX || endingX || controlSwitch) ? false : true
+}
+
+private hideSwitchAlarmSection() {
+    (controlledSwitch || controlledAlarm || chimeDevices || revertDelay) ? false : true
+}
+
+private hidePushoverNotificationsSection() {
+    (pushoverDevice) ? false : true
+}
+
+private hideTextPushNotificationsSection() {
+    (wantsPush || recipients || SMSContactsSendSMS) ? false : true
+}
+
+private hideSpeechNotificationsSection() {
+    (speechDevices || ttsDevices) ? false : true
 }
 
 private offset(value) {
-	def result = value ? ((value > 0 ? "+" : "") + value + " min") : ""
+    def result = value ? ((value > 0 ? "+" : "") + value + " min") : ""
 }
 
 private timeIntervalLabel() {
-	def result = ""
-	if (startingX == "Sunrise" && endingX == "Sunrise") result = "Sunrise" + offset(startSunriseOffset) + " to " + "Sunrise" + offset(endSunriseOffset)
-	else if (startingX == "Sunrise" && endingX == "Sunset") result = "Sunrise" + offset(startSunriseOffset) + " to " + "Sunset" + offset(endSunsetOffset)
-	else if (startingX == "Sunset" && endingX == "Sunrise") result = "Sunset" + offset(startSunsetOffset) + " to " + "Sunrise" + offset(endSunriseOffset)
-	else if (startingX == "Sunset" && endingX == "Sunset") result = "Sunset" + offset(startSunsetOffset) + " to " + "Sunset" + offset(endSunsetOffset)
-	else if (startingX == "Sunrise" && ending) result = "Sunrise" + offset(startSunriseOffset) + " to " + hhmm(ending, "h:mm a z")
-	else if (startingX == "Sunset" && ending) result = "Sunset" + offset(startSunsetOffset) + " to " + hhmm(ending, "h:mm a z")
-	else if (starting && endingX == "Sunrise") result = hhmm(starting) + " to " + "Sunrise" + offset(endSunriseOffset)
-	else if (starting && endingX == "Sunset") result = hhmm(starting) + " to " + "Sunset" + offset(endSunsetOffset)
-	else if (starting && ending) result = hhmm(starting) + " to " + hhmm(ending, "h:mm a z")
+    def result = ""
+    if (startingX == "Sunrise" && endingX == "Sunrise") result = "Sunrise" + offset(startSunriseOffset) + " to " + "Sunrise" + offset(endSunriseOffset)
+    else if (startingX == "Sunrise" && endingX == "Sunset") result = "Sunrise" + offset(startSunriseOffset) + " to " + "Sunset" + offset(endSunsetOffset)
+    else if (startingX == "Sunset" && endingX == "Sunrise") result = "Sunset" + offset(startSunsetOffset) + " to " + "Sunrise" + offset(endSunriseOffset)
+    else if (startingX == "Sunset" && endingX == "Sunset") result = "Sunset" + offset(startSunsetOffset) + " to " + "Sunset" + offset(endSunsetOffset)
+    else if (startingX == "Sunrise" && ending) result = "Sunrise" + offset(startSunriseOffset) + " to " + hhmm(ending, "h:mm a z")
+    else if (startingX == "Sunset" && ending) result = "Sunset" + offset(startSunsetOffset) + " to " + hhmm(ending, "h:mm a z")
+    else if (starting && endingX == "Sunrise") result = hhmm(starting) + " to " + "Sunrise" + offset(endSunriseOffset)
+    else if (starting && endingX == "Sunset") result = hhmm(starting) + " to " + "Sunset" + offset(endSunsetOffset)
+    else if (starting && ending) result = hhmm(starting) + " to " + hhmm(ending, "h:mm a z")
 }
 
-private sendMessage(msg) {   
-    //First try to use Contact Book (Depricated 30July2018)
-    if (location.contactBookEnabled) {
-        if (loggingOn) log.debug("sending '$msg' notification to: ${recipients?.size()}")
-        sendNotificationToContacts(msg, recipients)
+private sendMessage(msg) {
+    //Schedule switch/alarm/chime end time
+    if (revertDelay) {
+        runIn(revertDelay.toInteger(),"resetSwitchAlarmChime")
+    }  
+    //Notify via switch
+    if (controlledSwitch) {
+        if (controlledSwitchOn) {
+            controlledSwitch.each() {
+                it.on()
+            }
+        } else {
+            controlledSwitch.each() {
+                it.off()
+            }
+        }
+    }
+    
+    //Notify via alarm
+    controlledAlarm?.each() {
+        it.on()
     }
 
-    //Otherwise use old school Push/SMS notifcations
-    else {
+    //Notify via chime
+    chimeDevices.each() {
+        it.beep()
+    }
+    
+    //Speak Message
+    if (speechDevices) {
+        speechDevices.each() {
+            it.speak(msg)
+            log.info "Spoke '" + msg + "' with " + it.device.displayName
+        }
+    }
+    if (ttsDevices) {
+        state.sound = textToSpeech(msg, true)
+        //sound.uri = sound.uri.replace('https:', 'http:')  //todo not sure I need this, it's in some examples but not others
+        
+        state.sound.duration = (state.sound.duration.toInteger() + 5).toString()
+        ttsDevices.each() {
+            def currentStatus = ""
+            try {
+                currentStatus = it?.latestValue("status")
+            } catch (e) { log.error "Error getting device currentStatus" }
+            def currentTrack = ""
+            try {
+                currentTrack = it?.latestState("trackData")?.jsonValue
+            } catch (e) { log.error "Error getting device currentTrack" }
+            if (currentTrack != null) {
+                //currentTrack has data
+                if ((currentStatus == 'playing' || currentTrack?.status == 'playing') && (!((currentTrack?.status == 'stopped') || (currentTrack?.status == 'paused')))) { 
+                    it.playTrackAndResume(state.sound.uri, state.sound.duration) //todo- removed last parameter: "[delay: myDelay]" from example, ok?
+                } else {
+                    it.playTrackAndRestore(state.sound.uri, state.sound.duration)
+                }
+            } else {
+                if (currentStatus != null) { 
+                    if (currentStatus == "disconnected") {
+                        it.playTrackAndResume(state.sound.uri, state.sound.duration)
+                    } else {
+                        if (currentStatus == "playing") {   
+                            it.playTrackAndResume(state.sound.uri, state.sound.duration)       
+                        } else {
+                            it.playTrackAndRestore(state.sound.uri, state.sound.duration)     
+                        }
+                    }
+                } else {
+                    it.playTrackAndRestore(state.sound.uri, state.sound.duration)       
+                }
+            }
+            log.info "Spoke '" + msg + "' with " + it.device.displayName
+        }
+    }
+    
+    //Add time stamps for text/push messages (not for audio)
+    if (useTimeStamp) {
+        def stamp = new Date().format('yyyy-M-d HH:mm:ss',location.timeZone)
+        msg = msg + " (" + stamp + ")"
+    }
+    
+    //First try to use Contact Book (Depricated 30July2018)
+    if (location.contactBookEnabled) {
+        log.info "sent '$msg' notification to: ${recipients?.size()}"
+        sendNotificationToContacts(msg, recipients)
+    } else {
+        //Otherwise use old school Push/SMS notifications
         if (loggingOn) log.debug("sending message to app notifications tab: '$msg'")
         sendNotificationEvent(msg)  //First send to app notifications (because of the loop we're about to do, we need to use this version to avoid multiple instances) 
+        
         if (wantsPush) {
-            sendPushMessage(msg)  //Second, send the push notification if user wanted it
-            if (loggingOn) log.debug("sending push message")
+            sendNotification(msg, [event: false]) //sends a push notification without repeating it in the app event list, works with the new SmartThings app
+            log.info "sent '$msg' via push"
         }
 
         if (state.SMSContactsMap != null) {  //Third, send SMS messages if desired
             def SMSContactsSplit = parent.settings["SMSContacts"].split(';')
             for (int i = 0; i < state.SMSContactsMap.size(); i++) {
                 if (state.SMSContactsMap[i]) {
-                    if (parent.loggingOn) log.debug "Sending SMS to ${SMSContactsSplit[i]}"
                     sendSmsMessage(SMSContactsSplit[i], msg)
+                    log.info "sent '$msg' via SMS to ${SMSContactsSplit[i]}"
                 }
             }
         }
+    }
+    
+    //Then send Pushover notifications:
+    if (pushoverDevice) {
+        pushoverDevice.sendMessage(msg, messagePriority)
+    }
+}
+
+def resetSwitchAlarmChime() {
+    //Revert switch
+    if (controlledSwitch) {
+        if (controlledSwitchOn) {
+            controlledSwitch.each() {
+                it.off()
+            }
+        } else {
+            controlledSwitch.each() {
+                it.on()
+            }
+        }
+    }
+    
+    //Revert alarm
+    controlledAlarm?.each() {
+        it.off()
+    }
+
+    //Revert chime
+    chimeDevices.each() {
+        it.off()
     }
 }
